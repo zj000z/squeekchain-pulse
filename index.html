@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Squeekchain Pulse</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b0b0d; --card:#151518; --line:#26262b; --fg:#f2f2f4; --dim:#8b8b95; --accent:#ffcf4d; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:40px 20px; background:var(--bg); color:var(--fg);
+         font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  header { max-width:820px; margin:0 auto 28px; }
+  h1 { font-size:20px; letter-spacing:.14em; text-transform:uppercase; margin:0 0 6px; }
+  .sub { color:var(--dim); font-size:12px; }
+  main { max-width:820px; margin:0 auto; display:grid; gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:18px; }
+  .card h2 { font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--dim);
+             margin:0 0 14px; font-weight:500; }
+  .row { display:flex; justify-content:space-between; gap:16px; padding:5px 0; }
+  .row span:first-child { color:var(--dim); }
+  .row span:last-child { text-align:right; word-break:break-all; }
+  .big { font-size:26px; color:var(--accent); }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:12px; }
+  .bar i { display:block; height:100%; background:var(--accent); width:0; transition:width .4s; }
+  footer { max-width:820px; margin:26px auto 0; color:var(--dim); font-size:12px; display:flex; gap:14px; }
+  .err { color:#ff6b6b; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Squeekchain Pulse</h1>
+  <div class="sub">Live state of the Squeekchain economy on Sepolia · reads the contracts directly</div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>SQK token</h2>
+    <div class="row"><span>total supply</span><span class="big" id="supply">—</span></div>
+    <div class="row"><span>cap</span><span id="cap">—</span></div>
+    <div class="bar"><i id="turn"></i></div>
+    <div class="row"><span>emitted</span><span id="pct">—</span></div>
+    <div class="row"><span>minted / burned</span><span id="mb">—</span></div>
+  </section>
+
+  <section class="card">
+    <h2>Core</h2>
+    <div class="row"><span>block</span><span id="block">—</span></div>
+    <div class="row"><span>gas price</span><span id="gas">—</span></div>
+    <div class="row"><span>core</span><span id="core">—</span></div>
+    <div class="row"><span>paused</span><span id="paused">—</span></div>
+    <div class="row"><span>mining</span><span id="mining">—</span></div>
+  </section>
+</main>
+
+<footer>
+  <span id="status">loading…</span>
+  <span id="when"></span>
+</footer>
+
+<script type="module">
+const RPC = 'https://ethereum-sepolia-rpc.publicnode.com';
+const TOKEN = '0x5501e1fa81be1c3f49225fa7668da0245d07db60';
+const CORE  = '0x980b4424c007caf7a1f3670b48c8eaef7ebc3d44';
+const SEL = { totalSupply:'0x18160ddd', cap:'0x355274ea', totalMinted:'0xa2309ff8',
+              totalBurned:'0xd89135cd', paused:'0x5c975abb', mining:'0x662fac39' };
+
+const $ = (id) => document.getElementById(id);
+const fmt = (v) => (Number(v) / 1e18).toLocaleString('en-US', { maximumFractionDigits: 4 });
+
+async function rpc(method, params) {
+  const res = await fetch(RPC, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    signal: AbortSignal.timeout(15000),
+  });
+  const body = await res.json();
+  if (body.error) throw new Error(body.error.message);
+  return body.result;
+}
+const call = (to, data) => rpc('eth_call', [{ to, data }, 'latest']);
+const addrOf = (w) => '0x' + w.slice(-40);
+
+async function refresh() {
+  try {
+    const [block, gas, supply, cap, minted, burned, paused, mining] = await Promise.all([
+      rpc('eth_blockNumber', []),
+      rpc('eth_gasPrice', []),
+      call(TOKEN, SEL.totalSupply),
+      call(TOKEN, SEL.cap),
+      call(TOKEN, SEL.totalMinted),
+      call(TOKEN, SEL.totalBurned),
+      call(CORE, SEL.paused),
+      call(TOKEN, SEL.mining),
+    ]);
+
+    const s = BigInt(supply), c = BigInt(cap);
+    const pct = c > 0n ? Number((s * 10000n) / c) / 100 : 0;
+
+    $('supply').textContent = fmt(s);
+    $('cap').textContent = fmt(c);
+    $('pct').textContent = pct + '%';
+    $('turn').style.width = Math.min(100, pct) + '%';
+    $('mb').textContent = `${fmt(BigInt(minted))} / ${fmt(BigInt(burned))}`;
+    $('block').textContent = Number(BigInt(block)).toLocaleString();
+    $('gas').textContent = (Number(BigInt(gas)) / 1e9).toFixed(9) + ' gwei';
+    $('core').textContent = CORE;
+    $('paused').textContent = paused === '0x' + '0'.repeat(64) ? 'no' : 'YES';
+    $('mining').textContent = addrOf(mining);
+    $('status').textContent = 'ok';
+    $('status').className = '';
+    $('when').textContent = 'updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('status').textContent = 'error: ' + e.message;
+    $('status').className = 'err';
+  }
+}
+
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
